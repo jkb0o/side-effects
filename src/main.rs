@@ -1,4 +1,4 @@
-use bevy::{prelude::*, audio::{Source, Sample}, asset::Asset, utils::{HashMap, HashSet}};
+use bevy::{prelude::*, utils::HashMap};
 
 pub fn main() {
     App::new()
@@ -10,14 +10,9 @@ pub fn main() {
 }
 
 
-pub struct Playback {
-    sink: Handle<AudioSink>,
-    handle: Handle<AudioSource>
-}
-
 #[derive(Resource)]
 pub struct AudioLib {
-    playback: HashMap<&'static str, Playback>,
+    playback: HashMap<&'static str, Handle<AudioSink>>,
     loaded: bool,
 }
 
@@ -37,7 +32,7 @@ pub fn setup(
         let audio_handle = asset_server.load(path);
         let sink_handle = audio.play_with_settings(audio_handle.clone(), PlaybackSettings { repeat: true, ..default() });
         let sink_handle = sinks.get_handle(sink_handle);
-        playback.insert(*sample, Playback { sink: sink_handle, handle: audio_handle });
+        playback.insert(*sample, sink_handle);
     }
 
     commands.insert_resource(AudioLib {
@@ -55,7 +50,7 @@ pub fn wait_audio_loaded(
     }
     let loaded_samples = lib.playback
         .values()
-        .filter(|p| sinks.get_mut(&p.sink).map(|p| p.pause()).is_some() )
+        .filter(|p| sinks.get_mut(&p).map(|p| p.pause()).is_some() )
         .count();
     if loaded_samples == lib.playback.len() {
         info!("{loaded_samples} samples loaded!");
@@ -86,9 +81,9 @@ pub fn play_audio(
             *sample = "bass/bass1"
         }
         lib.playback.values().for_each(|p| {
-            sinks.get(&p.sink).unwrap().pause();
+            sinks.get(&p).unwrap().pause();
         });
-        let next = &lib.playback.get(*sample).unwrap().sink;
+        let next = &lib.playback.get(*sample).unwrap();
         sinks.get(next).unwrap().play();
         *toggle_at += 8.;
     }
