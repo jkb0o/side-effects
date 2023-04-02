@@ -1,90 +1,69 @@
-use bevy::{prelude::*, utils::HashMap};
+use {bevy::prelude::*, bevy_fundsp::prelude::*};
+use {bevy_fundsp::dsp_graph::DspGraph};
+use {fundsp::hacker::{adsr_live}};
+use rand::{thread_rng, Rng};
 
 pub fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins)
-        .add_startup_system(setup)
-        .add_system(wait_audio_loaded)
-        .add_system(play_audio)
-        .run();
+    let app = &mut App::new();
+    app.add_plugins(DefaultPlugins);
+    app.add_plugin(DspPlugin::default());
+    register_sources(app);
+    app.run();
 }
 
-
-#[derive(Resource)]
-pub struct AudioLib {
-    playback: HashMap<&'static str, Handle<AudioSink>>,
-    loaded: bool,
+pub fn register_sources(app: &mut App) {
+    app
+        .add_dsp_source(step1, SourceType::Static { duration : 1.0 })
+        .add_dsp_source(step2, SourceType::Static { duration : 1.0 })
+        .add_dsp_source(step3, SourceType::Static { duration : 1.0 })
+        .add_dsp_source(step4, SourceType::Static { duration : 1.0 })
+        .add_system(interactive_audio);
 }
 
-pub fn setup(
-    mut commands: Commands,
-    audio: Res<Audio>,
-    sinks: Res<Assets<AudioSink>>,
-    asset_server: Res<AssetServer>
+// return envelope(|t| max(-(1.0 / length * t - 1.0).powi(*rougthness*2) + 1.0, 0.0))
+// D# minor: D♯, E♯, F♯, G♯, A♯, B , C♯
+// 5 octave: 63, 65, 66, 68, 70, 71, 73
+fn step1() -> impl AudioUnit32 {
+    dc(midi_hz(63.0 - 12.0*1.0)) >> sine() * 0.8  * envelope(|t| max(-(100.0 * t - 1.0).powi(40) + 1.0, 0.0)) +
+    pink()         * 0.05 * envelope(|t| max(-(60.0  * t - 1.0).powi(40) + 1.0, 0.0))
+}
+fn step2() -> impl AudioUnit32 {
+    dc(midi_hz(65.0 - 12.0*1.0)) >> sine() * 0.8  * envelope(|t| max(-(100.0 * t - 1.0).powi(40) + 1.0, 0.0)) +
+    pink()         * 0.05 * envelope(|t| max(-(60.0  * t - 1.0).powi(40) + 1.0, 0.0))
+}
+fn step3() -> impl AudioUnit32 {
+    dc(midi_hz(66.0 - 12.0*1.0)) >> sine() * 0.8  * envelope(|t| max(-(100.0 * t - 1.0).powi(40) + 1.0, 0.0)) +
+    pink()         * 0.05 * envelope(|t| max(-(60.0  * t - 1.0).powi(40) + 1.0, 0.0))
+}
+fn step4() -> impl AudioUnit32 {
+    dc(midi_hz(68.0 - 12.0*1.0)) >> sine() * 0.8  * envelope(|t| max(-(100.0 * t - 1.0).powi(40) + 1.0, 0.0)) +
+    pink()         * 0.05 * envelope(|t| max(-(60.0  * t - 1.0).powi(40) + 1.0, 0.0))
+}
+
+fn stepper() -> impl DspGraph {
+    let x: [fn () -> impl AudioUnit32; 4] = [step1, step2, step3, step4];
+    return step4
+}
+
+fn triangle_wave() -> impl AudioUnit32 {
+    // Note is G4
+    sine_hz(400.0) * 0.5 * envelope(|t| -(2.0 * t - 1.0).powi(2) + 1.0)
+    // triangle_hz(392.0) >> split::<U2>() * 0.2
+}
+
+fn interactive_audio(
+    input: Res<Input<KeyCode>>,
+    mut assets: ResMut<Assets<AudioSource>>,
+    dsp_manager: Res<DspManager>,
+    mut audio: ResMut<Audio>,
+    mut stepArp: Local<i32>
 ) {
-    let samples = &[
-        "bass/bass1",
-        "bass/bass2"
-    ];
-    let mut playback = HashMap::new();
-    for sample in samples {
-        let path = format!("audio/{sample}.wav");
-        let audio_handle = asset_server.load(path);
-        let sink_handle = audio.play_with_settings(audio_handle.clone(), PlaybackSettings { repeat: true, ..default() });
-        let sink_handle = sinks.get_handle(sink_handle);
-        playback.insert(*sample, sink_handle);
+    if input.just_pressed(KeyCode::Q) {
+        let src = dsp_manager
+            .get_graph(stepper())
+            .unwrap_or_else(|| panic!("DSP source not found!"));
+
+        audio.play_dsp(assets.as_mut(), src);
     }
 
-    commands.insert_resource(AudioLib {
-        playback,
-        loaded: false
-    });
-}
-
-pub fn wait_audio_loaded(
-    mut lib: ResMut<AudioLib>,
-    mut sinks: ResMut<Assets<AudioSink>>
-) {
-    if lib.loaded {
-        return;
-    }
-    let loaded_samples = lib.playback
-        .values()
-        .filter(|p| sinks.get_mut(&p).map(|p| p.pause()).is_some() )
-        .count();
-    if loaded_samples == lib.playback.len() {
-        info!("{loaded_samples} samples loaded!");
-        lib.loaded = true;
-    }
-}
-
-pub fn play_audio(
-    lib: Res<AudioLib>,
-    sinks: Res<Assets<AudioSink>>,
-    time: Res<Time>,
-    mut sample: Local<&'static str>,
-    mut toggle_at: Local<f32>
-) {
-    if !lib.loaded {
-        return;
-    }
-    if *toggle_at == 0. {
-        *toggle_at = time.elapsed_seconds();
-    }
-    if sample.is_empty() {
-        *sample = "bass/bass1";
-    }
-    if *toggle_at <= time.elapsed_seconds() {
-        if *sample == "bass/bass1" {
-            *sample = "bass/bass2"
-        } else {
-            *sample = "bass/bass1"
-        }
-        lib.playback.values().for_each(|p| {
-            sinks.get(&p).unwrap().pause();
-        });
-        let next = &lib.playback.get(*sample).unwrap();
-        sinks.get(next).unwrap().play();
-        *toggle_at += 8.;
-    }
 }

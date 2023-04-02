@@ -8,3 +8,6 @@ edition = "2021"
 [dependencies]
 bevy = "0.10.1"
 bevy_fundsp = "0.3.0"
+fundsp = "0.12.0"
+rand = "0.8.5"
+
